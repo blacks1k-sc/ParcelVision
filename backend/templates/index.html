@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ParcelVision Upload</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; text-align: center; background: #f8f8f8; }
+    #preview { width: 90%; max-width: 400px; margin-top: 1rem; border-radius: 8px; display: none; }
+    #status { margin-top: 1rem; font-weight: bold; }
+    button { padding: 0.6rem 1.2rem; border: none; border-radius: 6px; background: #0066ff; color: #fff; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <h2>📦 ParcelVision</h2>
+  <p>Take a picture or upload a parcel image to log it automatically.</p>
+
+  <form id="uploadForm">
+    <input type="file" id="fileInput" name="file" accept="image/*" capture="environment" required />
+    <br><br>
+    <button type="submit">Upload</button>
+  </form>
+
+  <img id="preview" />
+  <div id="status"></div>
+
+  <script>
+    const form = document.getElementById("uploadForm");
+    const fileInput = document.getElementById("fileInput");
+    const preview = document.getElementById("preview");
+    const statusDiv = document.getElementById("status");
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = e => {
+          preview.src = e.target.result;
+          preview.style.display = "block";
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      statusDiv.textContent = "Uploading...";
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (data.status === "success") {
+          statusDiv.textContent = "✅ " + data.message;
+          console.log(data.data);
+        } else {
+          statusDiv.textContent = "⚠️ " + (data.error || "Upload failed");
+        }
+      } catch (err) {
+        statusDiv.textContent = "❌ Network error: " + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

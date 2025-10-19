@@ -18,19 +18,27 @@ def connect_to_sheet():
 
 
 # ✅ Append a parcel entry inside the filtered table boundary
-def append_row(data):
+def append_row(row_data):
+    """
+    Append a parcel entry to the Google Sheet.
+    
+    Args:
+        row_data (list): List containing parcel data in this order:
+            [timestamp, unit, name, supplier, parcel_type, released?, released_time]
+            Expected length: 7 elements
+    """
     sheet = connect_to_sheet()
-    timestamp = datetime.now().strftime("%m/%d/%Y %H:%M:%S")
-
-    row = [
-        timestamp,                      # Column A (Timestamp)
-        data.get("unit", ""),            # Column B (UNIT)
-        data.get("name", ""),            # Column C (NAME)
-        data.get("supplier", ""),        # Column D (PACKAGE COMPANY)
-        data.get("parcel_type", ""),     # Column E (PARCEL TYPE)
-        "",                              # Column F (RELEASED ?)
-        ""                               # Column G (RELEASED TIME)
-    ]
+    
+    # Validate input
+    if not isinstance(row_data, list):
+        raise ValueError(f"Expected list, got {type(row_data)}")
+    
+    if len(row_data) != 7:
+        raise ValueError(f"Expected 7 elements in row_data, got {len(row_data)}. "
+                        f"Expected: [timestamp, unit, name, supplier, parcel_type, released?, released_time]")
+    
+    # Use the provided row_data directly
+    row = row_data
 
     # Find last filled visible row in Column A
     col_a = sheet.col_values(1)
