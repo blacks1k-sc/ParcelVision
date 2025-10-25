@@ -36,7 +36,27 @@ def extract_with_gemini(image_path: str) -> Dict:
         "contents": [{
             "parts": [
                 {
-                    "text": "JSON output only: unit, name, supplier, parcel_type from label"
+                    "text": """Extract from this shipping label:
+
+1. unit: The apartment/suite/unit number. Look for:
+   - FIRST number in the delivery address line (e.g., "2121 Doghouse Road" → unit is "2121")
+   - OR text like "SUITE 604", "UNIT 1205", "APT 301", "#604"
+   - OR handwritten number near the address
+   IGNORE: Numbers in boxes at top (S 003, C004, etc.), tracking numbers, barcodes, zip codes (10001), phone numbers
+
+2. name: Recipient's full name (e.g., "Rufus Corgerson")
+
+3. supplier: 
+   - If label shows "Amazon.com" → "AMAZON"
+   - Otherwise check for: FedEx, UPS, DHL, Purolator, Canada Post, Intelcom, Canpar
+
+4. parcel_type: Based on packaging
+   - Brown cardboard → "BROWN BOX"
+   - White → "WHITE PACKAGE"
+   - Flat → "ENVELOPE"
+
+Return JSON only:
+{"unit":"2121","name":"Rufus Corgerson","supplier":"AMAZON","parcel_type":"BROWN BOX"}"""
                 },
                 {
                     "inline_data": {
@@ -73,14 +93,25 @@ def extract_with_gemini(image_path: str) -> Dict:
         candidate = result["candidates"][0]
         
         # Get the text content
+        content = ""
         if "content" in candidate and "parts" in candidate["content"]:
             parts = candidate["content"]["parts"]
             if parts and "text" in parts[0]:
                 content = parts[0]["text"]
-            else:
-                raise Exception("No text in response parts")
-        else:
-            raise Exception(f"Unexpected response structure: {json.dumps(candidate, indent=2)}")
+        
+        # If content is empty, the response was likely truncated
+        if not content or candidate.get("finishReason") == "MAX_TOKENS":
+            # Try to get partial content from the response
+            if "content" in candidate and "parts" in candidate["content"]:
+                parts = candidate["content"]["parts"]
+                if parts:
+                    content = parts[0].get("text", "")
+            
+            if not content:
+                raise Exception(f"Response truncated or empty. Candidate: {json.dumps(candidate, indent=2)}")
+        
+        if not content:
+            raise Exception("No text in response")
         
         print(f"📝 Gemini response:\n{content}\n")
         
