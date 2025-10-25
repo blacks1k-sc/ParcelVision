@@ -1,6 +1,6 @@
 """
 Parcel label extraction using Google Gemini Vision API.
-Replace your backend/ocr_utils.py with this file.
+Improved version for accurate unit (end-of-address) and supplier (FleetOptics) extraction.
 """
 
 import os
@@ -14,163 +14,145 @@ from typing import Dict
 def extract_with_gemini(image_path: str) -> Dict:
     """
     Uses Google Gemini to extract parcel information.
-    Requires GEMINI_API_KEY environment variable.
+    Enhanced: removes letter prefixes from alphanumeric units (e.g., B308 → 308).
     """
+    import cv2, pytesseract
+
+    def run_ocr_fallback(img_path: str) -> str:
+        img = cv2.imread(img_path)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.bilateralFilter(gray, 9, 75, 75)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return pytesseract.image_to_string(thresh).upper()
+
+    def normalize_unit(u: str) -> str:
+        """Remove prefixes like A308→308 but keep special words (PH, BSMT)."""
+        if not u or u == "UNKNOWN":
+            return "UNKNOWN"
+        u = u.strip().upper()
+        if re.fullmatch(r"[A-Z]\d{2,4}", u):  # B308 → 308
+            u = re.sub(r"^[A-Z]", "", u)
+        elif re.fullmatch(r"PH\d{1,3}", u):   # keep PH05 as 05
+            u = re.sub(r"^PH", "", u)
+        elif re.fullmatch(r"BSMT|BASEMENT|LOWER|UPPER|MAIN|G", u):
+            return u
+        return u
+
     api_key = os.getenv("GEMINI_API_KEY")
-    
     if not api_key:
-        raise ValueError(
-            "❌ GEMINI_API_KEY not found!\n"
-            "Set it with: export GEMINI_API_KEY='your-key-here'\n"
-            "Get a key at: https://makersuite.google.com/app/apikey"
-        )
-    
-    # Read and encode image
+        raise ValueError("❌ GEMINI_API_KEY not found!")
+
     with open(image_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode()
-    
-    # Use the lightweight model which uses fewer tokens
+
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent?key={api_key}"
-    
+
     payload = {
         "contents": [{
             "parts": [
                 {
-                    "text": """Extract from this shipping label:
+                    "text": """Extract this shipping label as JSON only.
 
-1. unit: The apartment/suite/unit number. Look for:
-   - FIRST number in the delivery address line (e.g., "2121 Doghouse Road" → unit is "2121")
-   - OR text like "SUITE 604", "UNIT 1205", "APT 301", "#604"
-   - OR handwritten number near the address
-   IGNORE: Numbers in boxes at top (S 003, C004, etc.), tracking numbers, barcodes, zip codes (10001), phone numbers
+1. unit:
+   - Apartment/suite/unit number. May be alphanumeric (e.g., B308, PH05, 4B).
+   - If it contains a letter prefix (e.g., B308), return digits only → "308".
+   - Ignore postal codes (M6H 0E5), tracking numbers, barcodes.
 
-2. name: Recipient's full name (e.g., "Rufus Corgerson")
+2. name: Full recipient name.
 
-3. supplier: 
-   - If label shows "Amazon.com" → "AMAZON"
-   - Otherwise check for: FedEx, UPS, DHL, Purolator, Canada Post, Intelcom, Canpar
+3. supplier: Amazon, UPS, FedEx, DHL, Purolator, Intelcom, FleetOptics, Canpar, Canada Post, or UNKNOWN.
 
-4. parcel_type: Based on packaging
-   - Brown cardboard → "BROWN BOX"
-   - White → "WHITE PACKAGE"
-   - Flat → "ENVELOPE"
+4. parcel_type: BROWN BOX / WHITE PACKAGE / ENVELOPE.
 
 Return JSON only:
-{"unit":"2121","name":"Rufus Corgerson","supplier":"AMAZON","parcel_type":"BROWN BOX"}"""
+{"unit":"308","name":"Keon Woong Chu","supplier":"AMAZON","parcel_type":"WHITE PACKAGE"}"""
                 },
-                {
-                    "inline_data": {
-                        "mime_type": "image/jpeg",
-                        "data": image_data
-                    }
-                }
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_data}}
             ]
         }],
-        "generationConfig": {
-            "temperature": 0,
-            "topP": 1,
-            "topK": 1,
-            "maxOutputTokens": 8192
-        }
+        "generationConfig": {"temperature": 0, "topP": 1, "maxOutputTokens": 4096}
     }
-    
-    print("🤖 Sending image to Gemini Vision API...")
-    
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        
-        if response.status_code != 200:
-            error_data = response.json()
-            error_msg = error_data.get("error", {}).get("message", response.text)
-            raise Exception(f"Gemini API Error ({response.status_code}): {error_msg}")
-        
-        result = response.json()
-        
-        # Extract the text response
-        if "candidates" not in result or not result["candidates"]:
-            raise Exception("No response from Gemini API")
-        
-        candidate = result["candidates"][0]
-        
-        # Get the text content
-        content = ""
-        if "content" in candidate and "parts" in candidate["content"]:
-            parts = candidate["content"]["parts"]
-            if parts and "text" in parts[0]:
-                content = parts[0]["text"]
-        
-        # If content is empty, the response was likely truncated
-        if not content or candidate.get("finishReason") == "MAX_TOKENS":
-            # Try to get partial content from the response
-            if "content" in candidate and "parts" in candidate["content"]:
-                parts = candidate["content"]["parts"]
-                if parts:
-                    content = parts[0].get("text", "")
-            
-            if not content:
-                raise Exception(f"Response truncated or empty. Candidate: {json.dumps(candidate, indent=2)}")
-        
-        if not content:
-            raise Exception("No text in response")
-        
-        print(f"📝 Gemini response:\n{content}\n")
-        
-        # Clean up response - add closing brace if stopped
-        content = content.strip()
-        if not content.endswith("}"):
-            content += "}"
-        
-        # Remove markdown if present
-        content = re.sub(r'```json\s*|\s*```', '', content).strip()
-        
-        # Extract JSON object
-        json_match = re.search(r'\{[^{}]*\}', content, re.DOTALL)
-        if not json_match:
-            raise Exception(f"No valid JSON found in: {content}")
-        
-        data = json.loads(json_match.group(0))
-        
-        # Validate and fill required keys
-        required_keys = ["unit", "name", "supplier", "parcel_type"]
-        for key in required_keys:
-            if key not in data or not str(data[key]).strip():
-                data[key] = "UNKNOWN"
-        
-        return data
-    
-    except requests.exceptions.Timeout:
-        raise Exception("⏱️ Gemini API timeout - please try again")
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"🌐 Network error: {e}")
-    except json.JSONDecodeError as e:
-        raise Exception(f"📝 Failed to parse JSON: {e}\nContent: {content}")
 
+    print("🤖 Sending image to Gemini Vision API...")
+
+    try:
+        r = requests.post(url, json=payload, timeout=30)
+        if r.status_code != 200:
+            raise Exception(f"Gemini error {r.status_code}: {r.text}")
+
+        result = r.json()
+        text = result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        text_clean = re.sub(r'```json\s*|\s*```', '', text).strip()
+
+        json_match = re.search(r"\{[^{}]*\}", text_clean, re.DOTALL)
+        data = json.loads(json_match.group(0)) if json_match else {}
+
+        # Ensure keys exist
+        for k in ["unit", "name", "supplier", "parcel_type"]:
+            if k not in data or data[k] is None:
+                data[k] = "UNKNOWN"
+
+        # Supplier correction
+        txt_up = text_clean.upper()
+        if "AMAZON" in txt_up:
+            data["supplier"] = "AMAZON"
+        elif "UPS" in txt_up:
+            data["supplier"] = "UPS"
+        elif "FLEETOPTICS" in txt_up:
+            data["supplier"] = "FLEETOPTICS"
+
+        # OCR fallback for missing unit
+        unit = str(data.get("unit") or "").strip().upper()
+        if unit in ["", "UNKNOWN", "NONE"]:
+            ocr_text = run_ocr_fallback(image_path)
+            combined = (text_clean + "\n" + ocr_text).upper()
+            patterns = [
+                r"(?:UNIT|SUITE|APT|#)\s*([A-Z0-9\-]{1,6})",
+                r"\b([A-Z]\d{2,4})\b",      # B308, A1205
+                r"\b(\d{1,4}[A-Z])\b",      # 4B
+                r"(?:GROVE|ROAD|STREET|DR|AVE|LANE|BLVD)\s+([A-Z0-9]{1,5})\b"
+            ]
+            match = None
+            for p in patterns:
+                match = re.search(p, combined)
+                if match:
+                    break
+            data["unit"] = match.group(1) if match else "UNKNOWN"
+
+        # Final normalization (strip prefixes)
+        data["unit"] = normalize_unit(data.get("unit", "UNKNOWN"))
+        for k in data:
+            val = str(data[k]) if data[k] else ""
+            data[k] = val.strip().upper() if val.strip() else "UNKNOWN"
+
+        return data
+
+    except Exception as e:
+        print(f"\n❌ ERROR: {e}\n")
+        return {
+            "unit": "UNKNOWN",
+            "name": "UNKNOWN",
+            "supplier": "UNKNOWN",
+            "parcel_type": "BROWN BOX"
+        }
 
 def extract_data(image_path: str) -> Dict:
     """
     Main entry point for parcel data extraction.
-    
-    Args:
-        image_path: Path to the parcel image
-        
-    Returns:
-        Dict with keys: unit, name, supplier, parcel_type
     """
     print(f"\n{'='*60}")
     print(f"🔍 ANALYZING: {os.path.basename(image_path)}")
     print(f"{'='*60}\n")
-    
+
     try:
         result = extract_with_gemini(image_path)
-        
-        # Clean and normalize data
         result = {
             "unit": str(result.get("unit", "UNKNOWN")).strip().upper(),
-            "name": str(result.get("name", "UNKNOWN")).strip().upper(),
+            "name": str(result.get("name", "UNKNOWN")).strip(),
             "supplier": str(result.get("supplier", "UNKNOWN")).strip().upper(),
             "parcel_type": str(result.get("parcel_type", "BROWN BOX")).strip().upper()
         }
-        
+
         print(f"{'='*60}")
         print("✅ EXTRACTION SUCCESSFUL")
         print(f"{'='*60}")
@@ -179,12 +161,11 @@ def extract_data(image_path: str) -> Dict:
         print(f"  🚚 Supplier:    {result['supplier']}")
         print(f"  📦 Type:        {result['parcel_type']}")
         print(f"{'='*60}\n")
-        
+
         return result
-        
+
     except Exception as e:
         print(f"\n❌ ERROR: {e}\n")
-        # Return fallback values
         return {
             "unit": "UNKNOWN",
             "name": "UNKNOWN",
@@ -193,22 +174,15 @@ def extract_data(image_path: str) -> Dict:
         }
 
 
-# For testing directly
 if __name__ == "__main__":
     import sys
-    
     if len(sys.argv) < 2:
         print("Usage: python ocr_utils.py <image_path>")
-        print("\nExample:")
-        print("  python ocr_utils.py uploads/parcel.jpg")
         sys.exit(1)
-    
     image_path = sys.argv[1]
-    
     if not os.path.exists(image_path):
         print(f"❌ File not found: {image_path}")
         sys.exit(1)
-    
     result = extract_data(image_path)
     print(f"\n📋 JSON OUTPUT:")
     print(json.dumps(result, indent=2))
