@@ -38,6 +38,8 @@ def analyze_parcel(image_path):
     Combines OCR (text extraction) and color-based parcel type detection.
     Returns a unified dictionary ready for Google Sheets logging.
     """
+    print("DEBUG extract_parcel_info type:", type(extract_parcel_info(image_path)))
+    print("DEBUG extract_parcel_info output:", extract_parcel_info(image_path))
     info = extract_parcel_info(image_path)   # 🧠 Extracts unit, name, supplier
     parcel_type = detect_parcel_type(image_path)
     info["parcel_type"] = parcel_type
