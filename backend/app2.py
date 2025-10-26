@@ -1,19 +1,11 @@
 """
-app2.py - ParcelVision with Remote 1Valet Control (HTTPS Enabled)
-
-Architecture:
-- MacBook runs this Flask app (OCR + Google Sheets)
-- Phone accesses MacBook via IP to scan parcels
-- Work PC has 1Valet tab open with listener script
-- MacBook sends unit data to Work PC browser via polling
-
-Usage:
-    python3 app2.py
-    Access from phone: https://YOUR_MACBOOK_IP:5002 (Note: HTTPS)
+app2.py - ParcelVision with Remote 1Valet Control
+(HTTP Version for NGROK)
 """
 
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+
 import os
 import sys
 import inspect
@@ -46,7 +38,16 @@ TEMPLATE_DIR = (
 )
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR)
-CORS(app)  # Enable CORS for cross-origin requests
+
+# === Full CORS Configuration ===
+CORS(app, resources={
+    r"/valet/*": {
+        "origins": "https://my.1valetbas.com",
+        "allow_headers": ["Content-Type", "ngrok-skip-browser-warning"]
+    }
+})
+
+# ===============================
 
 UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -258,56 +259,11 @@ def clear_queue():
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("🚀 ParcelVision Enhanced - Remote 1Valet Control")
+    print("🚀 ParcelVision Enhanced - Remote 1Valet Control (NGROK MODE)")
     print("="*60)
-    print("\n📋 Architecture:")
-    print("  1. MacBook runs this server")
-    print("  2. Phone scans parcels via MacBook IP")
-    print("  3. Data saved to Google Sheets")
-    print("  4. Units queued for 1Valet")
-    print("  5. Work PC browser polls this server")
-    print("  6. Browser auto-adds units to 1Valet")
-    
-    print("\n📱 Access from phone:")
-    print("  https://YOUR_MACBOOK_IP:5002  <-- NOTE: HTTPS")
-    
-    print("\n💻 Work PC Setup:")
-    print("  1. Open 1Valet SmartLockers tab")
-    print("  2. Open Console (F12)")
-    print("  3. Paste listener script (see valet_listener.js)")
-    
-    print("\n⚙️  Endpoints:")
-    print("  GET  /valet/pending       - Get units to add")
-    print("  POST /valet/complete      - Mark unit added")
-    print("  GET  /valet/queue-status  - Check queue")
-    print("  POST /valet/clear-queue   - Clear all")
-    
-    # --- START SSL (HTTPS) CONFIGURATION ---
-    print("\n" + "="*60)
-    print("🔒 CONFIGURING HTTPS (SSL)")
-    
-    # Automatically find the user's home directory
-    home_dir = os.path.expanduser("~")
-    cert_path = os.path.join(home_dir, "ssl-certs", "cert.pem")
-    key_path = os.path.join(home_dir, "ssl-certs", "key.pem")
-
-    # Check if the certificate and key files exist
-    if not os.path.exists(cert_path) or not os.path.exists(key_path):
-        print(f"❌ ERROR: SSL certs not found.")
-        print(f"  Expected cert at: {cert_path}")
-        print(f"  Expected key at:  {key_path}")
-        print("\n💡 Please run the 'openssl' command from the previous step")
-        print("   to generate these files in your '~/ssl-certs' folder.")
-        sys.exit(1) # Exit if certs are missing
-    
-    print(f"✓ Found certificate: {cert_path}")
-    print(f"✓ Found private key: {key_path}")
-    
-    ssl_context = (cert_path, key_path)
-    # --- END SSL (HTTPS) CONFIGURATION ---
     
     print("\n" + "="*60)
-    print("🌐 Server starting on https://0.0.0.0:5002  <-- HTTPS")
+    print("🌐 Server starting on http://0.0.0.0:5002")
     print("="*60 + "\n")
     
     # Get MacBook IP for easy reference
@@ -316,11 +272,10 @@ if __name__ == "__main__":
         hostname = socket.gethostname()
         local_ip = socket.gethostbyname(hostname)
         print(f"💡 Your MacBook IP: {local_ip}")
-        print(f"   Access from phone: https://{local_ip}:5002\n") # <-- HTTPS
-        print("⚠️ REMINDER: Your phone and Work PC must TRUST this new certificate!")
+        print(f"   Access from phone: http://{local_ip}:5002\n") # <-- HTTP
     except Exception as e:
         print("Could not determine local IP. Please find it in System Settings > Network.")
-        print(f"   Access from phone: https://YOUR_MAC_IP:5002\n")
+        print(f"   Access from phone: http://YOUR_MAC_IP:5002\n")
     
-    # Run the app with the SSL context
-    app.run(host="0.0.0.0", port=5002, debug=True, ssl_context=ssl_context)
+    # Run the app with HTTP
+    app.run(host="0.0.0.0", port=5002, debug=True)
