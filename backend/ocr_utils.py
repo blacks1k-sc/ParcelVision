@@ -165,10 +165,17 @@ Return JSON only:
         # Clean up unit - normalize format
         unit = str(data.get("unit", "UNKNOWN")).strip().upper()
         
-        # Remove single letter prefixes from alphanumeric units
-        # B308 → 308, A2401 → 2401, but keep PH05, BSMT, etc.
-        if re.fullmatch(r"[A-Z]-?\d{2,4}", unit):  # B308, B-308, A2401
-            unit = re.sub(r"^[A-Z]-?", "", unit)  # Remove letter and optional dash
+       # Normalize unit while preserving suffix letters (e.g., 1911B, 1911 B)
+        unit = re.sub(r"\s+", "", unit)  # remove spaces
+        unit = unit.replace("-", "")     # remove dashes like B-308 → B308
+
+        # Valid unit formats we want to keep:
+        # B308, A2401, PH05, 1911B, 308B, 1911B1 etc.
+        if not re.match(r"^[A-Z0-9]+$", unit):
+            unit = "UNKNOWN"
+
+        # If the unit ends with a letter (e.g., 1911B), keep it as-is
+        # If it starts with a letter and then digits, keep it too (B308)    
         
         data["unit"] = unit if unit and unit != "NONE" else "UNKNOWN"
         

@@ -1,0 +1,332 @@
+/**
+ * 1VALET AUTO-LISTENER - Work PC Browser Script
+ * 
+ * Polls MacBook server for units and auto-adds them to 1Valet popup.
+ * 
+ * Setup (ONE TIME):
+ * 1. Open 1Valet SmartLockers page
+ * 2. Click "ADD DELIVERY" button (KEEP POPUP OPEN)
+ * 3. Press F12 → Console
+ * 4. Paste this ENTIRE script
+ * 5. Update CONFIG.macbookIP below
+ * 6. Script will auto-start polling
+ * 
+ * Workflow:
+ * - Phone scans parcel → MacBook processes it → Adds to queue
+ * - This script polls MacBook every 5s for new units
+ * - Auto-adds units to the open 1Valet popup
+ * - You close popup when done to send notifications
+ */
+
+(function() {
+    'use strict';
+    
+    // ============================================================
+    // CONFIGURATION
+    // ============================================================
+    
+    const CONFIG = {
+        macbookIP: "192.168.6.28",  // ⚠️ CHANGE THIS TO YOUR MACBOOK IP!
+        pollInterval: 5000,           // Check every 5 seconds
+        autoStart: true
+    };
+    
+    const SERVER_URL = `http://${CONFIG.macbookIP}:5002`;
+    
+    // ============================================================
+    // STATE
+    // ============================================================
+    
+    const state = {
+        isRunning: false,
+        pollTimer: null,
+        processedUnits: new Set(),
+        isProcessing: false
+    };
+    
+    // ============================================================
+    // CORE FUNCTION: ADD UNIT TO POPUP
+    // ============================================================
+    
+    async function addUnit(unitNumber) {
+        console.log(`\n📦 Adding unit: ${unitNumber}...`);
+        
+        try {
+            // Find input field
+            const input = [...document.querySelectorAll('input')]
+                .find(inp => 
+                    inp.placeholder && 
+                    inp.placeholder.toLowerCase().includes('suite') &&
+                    inp.offsetParent !== null
+                );
+            
+            if (!input) {
+                console.error('❌ Input field not found - is popup still open?');
+                return false;
+            }
+            
+            // Clear and type unit number
+            input.value = '';
+            input.focus();
+            
+            for (const char of unitNumber) {
+                input.value += char;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                await sleep(50);
+            }
+            
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log(`  ✓ Typed: ${unitNumber}`);
+            
+            // Wait for dropdown
+            await sleep(800);
+            
+            // Click matching option
+            const allOptions = [...document.querySelectorAll('div, li, span')];
+            const matchingOption = allOptions.find(el => {
+                const text = el.textContent.trim();
+                return text === unitNumber && 
+                       el.offsetParent !== null &&
+                       el.getBoundingClientRect().height > 10;
+            });
+            
+            if (matchingOption) {
+                matchingOption.click();
+                console.log(`  ✓ Selected: ${unitNumber}`);
+                console.log('✅ Unit added!\n');
+                return true;
+            } else {
+                console.log('  ⚠️ Trying Enter key...');
+                input.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Enter',
+                    keyCode: 13,
+                    bubbles: true
+                }));
+                await sleep(300);
+                console.log('✅ Enter pressed\n');
+                return true;
+            }
+            
+        } catch (error) {
+            console.error('❌ Error:', error.message);
+            return false;
+        }
+    }
+    
+    // ============================================================
+    // POLLING LOGIC
+    // ============================================================
+    
+    async function checkForPendingUnits() {
+        if (state.isProcessing) {
+            return; // Still processing previous unit
+        }
+        
+        try {
+            const response = await fetch(`${SERVER_URL}/valet/pending`);
+            
+            if (!response.ok) {
+                return; // Server not reachable
+            }
+            
+            const data = await response.json();
+            
+            if (data.status === 'empty' || data.units.length === 0) {
+                return; // No pending units
+            }
+            
+            console.log(`\n📋 Found ${data.count} pending unit(s) from MacBook`);
+            
+            // Process first unit
+            const unitData = data.units[0];
+            const unit = unitData.unit;
+            
+            // Skip if already processed
+            if (state.processedUnits.has(unit)) {
+                console.log(`⏭️  Skipping ${unit} (already processed)`);
+                return;
+            }
+            
+            console.log(`🔄 Processing: ${unit} (${unitData.name})`);
+            
+            state.isProcessing = true;
+            
+            // Add unit to popup
+            const success = await addUnit(unit);
+            
+            if (success) {
+                // Mark as processed
+                state.processedUnits.add(unit);
+                
+                // Notify MacBook server
+                await fetch(`${SERVER_URL}/valet/complete`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ unit, success: true })
+                });
+                
+                console.log(`✅ Notified MacBook: ${unit} complete`);
+            }
+            
+            state.isProcessing = false;
+            
+        } catch (error) {
+            console.error('❌ Polling error:', error.message);
+            state.isProcessing = false;
+        }
+    }
+    
+    // ============================================================
+    // START/STOP CONTROLS
+    // ============================================================
+    
+    function startListener() {
+        if (state.isRunning) {
+            console.log('⚠️ Listener already running');
+            return;
+        }
+        
+        // Check if popup is open
+        const input = [...document.querySelectorAll('input')]
+            .find(inp => inp.placeholder && inp.placeholder.toLowerCase().includes('suite'));
+        
+        if (!input) {
+            console.error('❌ "ADD DELIVERY" popup not open!');
+            console.log('💡 Click "ADD DELIVERY" button first, then run: startValetListener()');
+            return;
+        }
+        
+        state.isRunning = true;
+        
+        console.log('\n' + '='.repeat(60));
+        console.log('🚀 1VALET AUTO-LISTENER STARTED');
+        console.log('='.repeat(60));
+        console.log(`📡 Polling: ${SERVER_URL}`);
+        console.log(`⏱️  Interval: ${CONFIG.pollInterval/1000}s`);
+        console.log(`⚠️  Keep popup open!`);
+        console.log('✋ Stop with: stopValetListener()');
+        console.log('='.repeat(60) + '\n');
+        
+        state.pollTimer = setInterval(checkForPendingUnits, CONFIG.pollInterval);
+        checkForPendingUnits(); // Check immediately
+    }
+    
+    function stopListener() {
+        if (!state.isRunning) {
+            console.log('⚠️ Listener not running');
+            return;
+        }
+        
+        clearInterval(state.pollTimer);
+        state.isRunning = false;
+        console.log('\n🛑 Listener stopped');
+    }
+    
+    // ============================================================
+    // UTILITY FUNCTIONS
+    // ============================================================
+    
+    function sleep(ms) {
+        return new Promise(r => setTimeout(r, ms));
+    }
+    
+    function checkStatus() {
+        console.log('\n📊 STATUS');
+        console.log('='.repeat(60));
+        console.log(`Running: ${state.isRunning ? '✅ Yes' : '❌ No'}`);
+        console.log(`Processing: ${state.isProcessing ? '✅ Yes' : '❌ No'}`);
+        console.log(`Processed units: ${state.processedUnits.size}`);
+        console.log(`Units: ${[...state.processedUnits].join(', ') || 'None'}`);
+        console.log('='.repeat(60) + '\n');
+    }
+    
+    function clearCache() {
+        state.processedUnits.clear();
+        console.log('✅ Cleared processed units cache');
+    }
+    
+    // ============================================================
+    // GLOBAL CONTROLS
+    // ============================================================
+    
+    window.startValetListener = startListener;
+    window.stopValetListener = stopListener;
+    window.valetStatus = checkStatus;
+    window.valetClearCache = clearCache;
+    
+    // Manual add function (for testing)
+    window.addUnit = addUnit;
+    
+    // ============================================================
+    // HELP & AUTO-START
+    // ============================================================
+    
+    console.log(`
+╔════════════════════════════════════════════════════════════╗
+║       1VALET AUTO-LISTENER - WORK PC BROWSER SCRIPT       ║
+╚════════════════════════════════════════════════════════════╝
+
+🎛️  CONTROLS:
+
+  startValetListener()  - Start auto-polling
+  stopValetListener()   - Stop
+  valetStatus()         - Show status
+  valetClearCache()     - Clear cache
+  addUnit("604")        - Manually add unit (testing)
+
+📝 SETUP CHECKLIST:
+
+  ✅ Update CONFIG.macbookIP above
+     Current: ${CONFIG.macbookIP}
+     ${CONFIG.macbookIP === "192.168.1.XXX" ? "⚠️  CHANGE THIS!" : "✅ Configured"}
+  
+  ✅ Click "ADD DELIVERY" button
+  ✅ Keep popup open
+  ✅ Paste this script in console
+
+⚙️  HOW IT WORKS:
+
+  1. Phone scans parcel on MacBook app
+  2. MacBook extracts unit and adds to queue
+  3. This script polls MacBook every 5s
+  4. Auto-adds units to open 1Valet popup
+  5. You close popup to send notifications
+
+⚠️  IMPORTANT:
+
+  - Keep "Deliveries" popup open at all times
+  - If popup closes, reopen it and restart script
+  - Close popup only when you want to send notifications
+  - Browser tab must stay on 1Valet page
+
+╔════════════════════════════════════════════════════════════╝
+    `);
+    
+    if (CONFIG.autoStart) {
+        console.log('🔄 Auto-starting in 3 seconds...\n');
+        setTimeout(startListener, 3000);
+    } else {
+        console.log('💡 Run startValetListener() to begin\n');
+    }
+    
+})(); units
+  checkPopup()                      - Verify popup is ready
+
+📋 WORKFLOW:
+
+  1. Keep "Deliveries" popup open
+  2. Run: addUnit("604")
+  3. Run: addUnit("2002")  (add more)
+  4. Close popup when done
+  5. Notifications will be sent
+
+⚠️  IMPORTANT:
+  - Keep popup open while adding units
+  - Each unit is selected automatically
+  - Close popup to send notifications
+  - Popup must stay open for this to work
+
+╔════════════════════════════════════════════════════════════╗
+
+🚀 Try: addUnit("604")
+`);
